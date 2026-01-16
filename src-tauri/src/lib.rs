@@ -4,6 +4,23 @@ use std::fs;
 use std::path::PathBuf;
 use tauri::{State, AppHandle, Manager};
 use uuid::Uuid;
+use chrono::{DateTime, Utc};
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Comment {
+    pub id: String,
+    pub author: String,
+    pub content: String,
+    pub created_at: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Attachment {
+    pub id: String,
+    pub file_name: String,
+    pub file_path: String, // Absolute path or relative to app data
+    pub mime_type: String,
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Task {
@@ -11,8 +28,11 @@ pub struct Task {
     pub content: String,
     pub description: Option<String>,
     pub due_date: Option<String>,
-    pub labels: Vec<String>, // Hex colors or label IDs
+    pub labels: Vec<String>,
+    pub comments: Vec<Comment>,
+    pub attachments: Vec<Attachment>,
 }
+
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Column {
@@ -99,6 +119,8 @@ fn add_task(state: State<'_, AppState>, column_id: String, content: String) -> R
             description: None,
             due_date: None,
             labels: vec![],
+            comments: vec![],
+            attachments: vec![],
         });
         save_board_to_disk(&board, &state.file_path.lock().unwrap());
         Ok(board.clone())
@@ -118,6 +140,44 @@ fn update_task(state: State<'_, AppState>, task_id: String, content: String) -> 
         }
     }
     board.clone()
+}
+
+#[tauri::command]
+fn add_comment(state: State<'_, AppState>, task_id: String, content: String) -> Result<Board, String> {
+    let mut board = state.board.lock().unwrap();
+    for col in board.columns.iter_mut() {
+        if let Some(task) = col.tasks.iter_mut().find(|t| t.id == task_id) {
+            let comment = Comment {
+                id: Uuid::new_v4().to_string(),
+                author: "User".to_string(), // In a real app, get from auth context
+                content,
+                created_at: Utc::now().to_rfc3339(),
+            };
+            task.comments.push(comment);
+            save_board_to_disk(&board, &state.file_path.lock().unwrap());
+            return Ok(board.clone());
+        }
+    }
+    Err("Task not found".to_string())
+}
+
+#[tauri::command]
+fn add_attachment(state: State<'_, AppState>, task_id: String, file_path: String, file_name: String, mime_type: String) -> Result<Board, String> {
+    let mut board = state.board.lock().unwrap();
+    for col in board.columns.iter_mut() {
+        if let Some(task) = col.tasks.iter_mut().find(|t| t.id == task_id) {
+            let attachment = Attachment {
+                id: Uuid::new_v4().to_string(),
+                file_name,
+                file_path,
+                mime_type,
+            };
+            task.attachments.push(attachment);
+            save_board_to_disk(&board, &state.file_path.lock().unwrap());
+            return Ok(board.clone());
+        }
+    }
+    Err("Task not found".to_string())
 }
 
 #[tauri::command]
@@ -219,6 +279,8 @@ fn move_task(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir().expect("failed to get app data dir");
@@ -248,6 +310,8 @@ pub fn run() {
             delete_column,
             add_task, 
             update_task, 
+            add_comment,
+            add_attachment,
             update_task_details,
             delete_task, 
             move_task
