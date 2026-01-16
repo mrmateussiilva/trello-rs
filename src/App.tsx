@@ -4,10 +4,14 @@ import { api, Board } from "./services/api";
 import { Column } from "./components/Column";
 import "./index.css";
 
+import { TaskModal } from "./components/TaskModal";
+import { Task } from "./services/api";
+
 function App() {
   const [board, setBoard] = useState<Board | null>(null);
   const [newColTitle, setNewColTitle] = useState("");
   const [isAddingCol, setIsAddingCol] = useState(false);
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
 
   const fetchBoard = async () => {
     const data = await api.getBoard();
@@ -81,7 +85,12 @@ function App() {
         <div className="h-full flex px-6 pb-6 pt-8 gap-6 items-start">
           <DragDropContext onDragEnd={onDragEnd}>
             {board.columns.map((col) => (
-              <Column key={col.id} column={col} refreshBoard={fetchBoard} />
+              <Column
+                key={col.id}
+                column={col}
+                refreshBoard={fetchBoard}
+                onTaskClick={setEditingTask}
+              />
             ))}
           </DragDropContext>
 
@@ -117,6 +126,13 @@ function App() {
           </div>
         </div>
       </main>
+
+      <TaskModal
+        task={editingTask}
+        isOpen={!!editingTask}
+        onClose={() => setEditingTask(null)}
+        onUpdate={fetchBoard}
+      />
     </div>
   );
 }

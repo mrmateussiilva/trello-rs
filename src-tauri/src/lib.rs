@@ -1,12 +1,17 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
-use tauri::State;
+use std::fs;
+use std::path::PathBuf;
+use tauri::{State, AppHandle, Manager};
 use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Task {
     pub id: String,
     pub content: String,
+    pub description: Option<String>,
+    pub due_date: Option<String>,
+    pub labels: Vec<String>, // Hex colors or label IDs
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -23,23 +28,17 @@ pub struct Board {
 
 impl Board {
     fn new() -> Self {
-        // Initial mock data
         Board {
             columns: vec![
                 Column {
                     id: "todo".to_string(),
                     title: "To Do".to_string(),
-                    tasks: vec![
-                        Task { id: Uuid::new_v4().to_string(), content: "Learn Tauri".to_string() },
-                        Task { id: Uuid::new_v4().to_string(), content: "Setup React".to_string() },
-                    ],
+                    tasks: vec![],
                 },
                 Column {
-                    id: "in-progress".to_string(),
-                    title: "In Progress".to_string(),
-                    tasks: vec![
-                        Task { id: Uuid::new_v4().to_string(), content: "Build Kanban".to_string() },
-                    ],
+                    id: "doing".to_string(),
+                    title: "Doing".to_string(),
+                    tasks: vec![],
                 },
                 Column {
                     id: "done".to_string(),
@@ -53,6 +52,13 @@ impl Board {
 
 pub struct AppState {
     pub board: Mutex<Board>,
+    pub file_path: Mutex<PathBuf>,
+}
+
+fn save_board_to_disk(board: &Board, path: &PathBuf) {
+    if let Ok(data) = serde_json::to_string_pretty(board) {
+        let _ = fs::write(path, data);
+    }
 }
 
 #[tauri::command]
@@ -60,6 +66,7 @@ fn get_board(state: State<'_, AppState>) -> Board {
     let board = state.board.lock().unwrap();
     board.clone()
 }
+
 
 #[tauri::command]
 fn add_column(state: State<'_, AppState>, title: String) -> Board {
@@ -70,6 +77,7 @@ fn add_column(state: State<'_, AppState>, title: String) -> Board {
         tasks: vec![],
     };
     board.columns.push(new_col);
+    save_board_to_disk(&board, &state.file_path.lock().unwrap());
     board.clone()
 }
 
@@ -77,6 +85,7 @@ fn add_column(state: State<'_, AppState>, title: String) -> Board {
 fn delete_column(state: State<'_, AppState>, column_id: String) -> Board {
     let mut board = state.board.lock().unwrap();
     board.columns.retain(|c| c.id != column_id);
+    save_board_to_disk(&board, &state.file_path.lock().unwrap());
     board.clone()
 }
 
@@ -87,7 +96,11 @@ fn add_task(state: State<'_, AppState>, column_id: String, content: String) -> R
         col.tasks.push(Task {
             id: Uuid::new_v4().to_string(),
             content,
+            description: None,
+            due_date: None,
+            labels: vec![],
         });
+        save_board_to_disk(&board, &state.file_path.lock().unwrap());
         Ok(board.clone())
     } else {
         Err("Column not found".to_string())
@@ -100,10 +113,34 @@ fn update_task(state: State<'_, AppState>, task_id: String, content: String) -> 
     for col in board.columns.iter_mut() {
         if let Some(task) = col.tasks.iter_mut().find(|t| t.id == task_id) {
             task.content = content.clone();
+            save_board_to_disk(&board, &state.file_path.lock().unwrap());
             break;
         }
     }
     board.clone()
+}
+
+#[tauri::command]
+fn update_task_details(
+    state: State<'_, AppState>, 
+    task_id: String, 
+    content: Option<String>,
+    description: Option<String>, 
+    due_date: Option<String>,
+    labels: Option<Vec<String>>
+) -> Result<Board, String> {
+    let mut board = state.board.lock().unwrap();
+    for col in board.columns.iter_mut() {
+        if let Some(task) = col.tasks.iter_mut().find(|t| t.id == task_id) {
+            if let Some(c) = content { task.content = c; }
+            if let Some(d) = description { task.description = Some(d); }
+            if let Some(dd) = due_date { task.due_date = Some(dd); }
+            if let Some(l) = labels { task.labels = l; }
+            save_board_to_disk(&board, &state.file_path.lock().unwrap());
+            return Ok(board.clone());
+        }
+    }
+    Err("Task not found".to_string())
 }
 
 #[tauri::command]
@@ -112,6 +149,7 @@ fn delete_task(state: State<'_, AppState>, task_id: String) -> Board {
     for col in board.columns.iter_mut() {
         col.tasks.retain(|t| t.id != task_id);
     }
+    save_board_to_disk(&board, &state.file_path.lock().unwrap());
     board.clone()
 }
 
@@ -174,6 +212,7 @@ fn move_task(
         }
     }
 
+    save_board_to_disk(&board, &state.file_path.lock().unwrap());
     Ok(board.clone())
 }
 
@@ -181,8 +220,27 @@ fn move_task(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .manage(AppState {
-            board: Mutex::new(Board::new()),
+        .setup(|app| {
+            let app_data_dir = app.path().app_data_dir().expect("failed to get app data dir");
+            if !app_data_dir.exists() {
+                let _ = fs::create_dir_all(&app_data_dir);
+            }
+            let file_path = app_data_dir.join("board.json");
+            
+            let mut board = Board::new();
+            if file_path.exists() {
+                 if let Ok(data) = fs::read_to_string(&file_path) {
+                    if let Ok(saved_board) = serde_json::from_str::<Board>(&data) {
+                        board = saved_board;
+                    }
+                 }
+            }
+
+            app.manage(AppState {
+                board: Mutex::new(board),
+                file_path: Mutex::new(file_path),
+            });
+            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_board, 
@@ -190,6 +248,7 @@ pub fn run() {
             delete_column,
             add_task, 
             update_task, 
+            update_task_details,
             delete_task, 
             move_task
         ])

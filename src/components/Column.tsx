@@ -1,14 +1,15 @@
 import { Droppable } from "@hello-pangea/dnd";
-import { Column as IColumn, api } from "../services/api";
+import { Column as IColumn, api, Task } from "../services/api";
 import { TaskCard } from "./TaskCard";
 import { useState } from "react";
 
 interface ColumnProps {
     column: IColumn;
     refreshBoard: () => void;
+    onTaskClick: (task: Task) => void;
 }
 
-export function Column({ column, refreshBoard }: ColumnProps) {
+export function Column({ column, refreshBoard, onTaskClick }: ColumnProps) {
     const [newTaskContent, setNewTaskContent] = useState("");
     const [isAdding, setIsAdding] = useState(false);
 
@@ -44,7 +45,7 @@ export function Column({ column, refreshBoard }: ColumnProps) {
                             className={`min-h-[20px] transition-colors rounded-md flex flex-col gap-2 ${snapshot.isDraggingOver ? 'bg-muted/50' : ''}`}
                         >
                             {column.tasks.map((task, index) => (
-                                <TaskCard key={task.id} task={task} index={index} />
+                                <TaskCard key={task.id} task={task} index={index} onClick={onTaskClick} />
                             ))}
                             {provided.placeholder}
                         </div>
